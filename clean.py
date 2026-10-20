@@ -31,3 +31,53 @@ print("age min/max:", customers["age"].min(), customers["age"].max())
 print("city values changed:", (raw["city"] != customers["city"]).sum())
 print("gender values changed:", (raw["gender"].fillna("") != customers["gender"]).sum())
 print("ages filled (blank + out of range):", raw["age"].isna().sum() + (~raw["age"].dropna().between(10, 100)).sum())
+# ================= Task 4: clean orders =================
+orders = pd.read_csv("data/raw/orders.csv")
+products = pd.read_csv("data/raw/products.csv")
+n_raw = len(orders)
+
+# 1. order_ts to datetime
+orders["order_ts"] = pd.to_datetime(orders["order_ts"])
+
+# 2. remove exact duplicate rows
+orders = orders.drop_duplicates()
+n_after_exact = len(orders)
+
+# 3. same order_id more than once: keep only the row with the latest order_ts
+orders = orders.sort_values("order_ts").drop_duplicates(subset="order_id", keep="last")
+n_after_latest = len(orders)
+
+# 4. order_amount to numeric (bad values -> NaN), then fill from the product price
+orders["order_amount"] = pd.to_numeric(orders["order_amount"], errors="coerce")
+orders = orders.merge(products[["product_id", "price_inr", "category"]], on="product_id", how="left")
+calc_amount = (orders["price_inr"] * orders["quantity"] * (1 - orders["discount_pct"] / 100)).round(2)
+n_amount_filled = orders["order_amount"].isna().sum()
+orders["order_amount"] = orders["order_amount"].fillna(calc_amount)
+
+# 5. negative delivery_minutes -> missing
+n_negative = (orders["delivery_minutes"] < 0).sum()
+orders["delivery_minutes"] = orders["delivery_minutes"].where(orders["delivery_minutes"] >= 0)
+
+# 6. completed orders: fill missing delivery_minutes with the median of that
+#    product category among completed orders; cancelled orders stay missing
+completed = orders["status"] == "completed"
+medians = orders[completed].groupby("category")["delivery_minutes"].median()
+n_delivery_filled = (completed & orders["delivery_minutes"].isna()).sum()
+orders.loc[completed, "delivery_minutes"] = orders.loc[completed, "delivery_minutes"].fillna(
+    orders.loc[completed, "category"].map(medians)
+)
+
+# ---- checks ----
+print("rows:", len(orders))
+print(orders["status"].value_counts())
+print("missing order_amount:", orders["order_amount"].isna().sum())
+print("missing delivery (completed):", orders[orders["status"] == "completed"]["delivery_minutes"].isna().sum())
+print("missing delivery (cancelled):", orders[orders["status"] == "cancelled"]["delivery_minutes"].isna().sum())
+print("completed order_amount sum:", round(orders[orders["status"] == "completed"]["order_amount"].sum(), 2))
+
+# ---- counts for the README ----
+print("exact duplicates removed:", n_raw - n_after_exact)
+print("older (pending) rows removed:", n_after_exact - n_after_latest)
+print("order_amount values filled:", n_amount_filled)
+print("negative delivery_minutes blanked:", n_negative)
+print("completed delivery_minutes filled with category median:", n_delivery_filled)

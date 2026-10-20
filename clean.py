@@ -81,3 +81,27 @@ print("older (pending) rows removed:", n_after_exact - n_after_latest)
 print("order_amount values filled:", n_amount_filled)
 print("negative delivery_minutes blanked:", n_negative)
 print("completed delivery_minutes filled with category median:", n_delivery_filled)
+# ================= Task 5: store =================
+import os, sqlite3
+
+os.makedirs("data/clean", exist_ok=True)
+
+customers_out = customers.copy()
+customers_out["signup_date"] = customers_out["signup_date"].dt.strftime("%Y-%m-%d")
+
+# helper columns from the merge are not part of the clean orders table
+orders_out = orders.drop(columns=["price_inr", "category"]).copy()
+orders_out["order_ts"] = orders_out["order_ts"].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+customers_out.to_csv("data/clean/customers.csv", index=False)
+products.to_csv("data/clean/products.csv", index=False)
+orders_out.to_csv("data/clean/orders.csv", index=False)
+
+conn = sqlite3.connect("data/instamart.db")
+customers_out.to_sql("customers", conn, if_exists="replace", index=False)
+products.to_sql("products", conn, if_exists="replace", index=False)
+orders_out.to_sql("orders", conn, if_exists="replace", index=False)
+conn.commit()
+conn.close()
+
+print("saved:", len(customers_out), "customers,", len(products), "products,", len(orders_out), "orders")

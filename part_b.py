@@ -77,3 +77,60 @@ print("explained_variance_ratio_:", pca.explained_variance_ratio_.round(3),
 rfm[["customer_id", "recency", "frequency", "monetary",
      "segment_id", "segment_name", "is_premium"]].to_csv("outputs/customer_segments.csv", index=False)
 print("saved outputs/customer_segments.csv:", len(rfm), "rows")
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+
+# ---- Task 4: lapse problem, features from orders BEFORE 2025-09-01 only ----
+cutoff = pd.Timestamp("2025-09-01")
+pre = completed[completed["order_ts"] < cutoff]
+sept = completed[(completed["order_ts"] >= cutoff) & (completed["order_ts"] < pd.Timestamp("2025-10-01"))]
+
+cohort_ids = pre["customer_id"].unique()
+lapsed = (~pd.Series(cohort_ids).isin(sept["customer_id"].unique())).astype(int).values
+
+feat = pre.groupby("customer_id").agg(
+    last_order=("order_ts", "max"),
+    frequency=("order_id", "nunique"),
+    monetary=("order_amount", "sum"),
+    avg_discount=("discount_pct", "mean"),
+    avg_delivery=("delivery_minutes", "mean"),
+).reset_index()
+feat["recency"] = (cutoff - feat["last_order"]).dt.days
+
+# cancellation rate: cancelled / all orders with a final status, before the cutoff
+all_pre = orders[orders["order_ts"] < cutoff]
+cancel = (all_pre.assign(c=(all_pre["status"] == "cancelled").astype(int))
+          .groupby("customer_id")["c"].mean().rename("cancel_rate"))
+feat = feat.merge(cancel, on="customer_id", how="left")
+
+# most frequent product category before the cutoff
+products = pd.read_sql_query("SELECT * FROM products", sqlite3.connect("data/instamart.db"))
+pre_cat = pre.merge(products[["product_id", "category"]], on="product_id")
+top_cat = (pre_cat.groupby("customer_id")["category"]
+           .agg(lambda s: s.value_counts().index[0]).rename("top_category"))
+feat = feat.merge(top_cat, on="customer_id", how="left")
+
+feat = feat.merge(customers[["customer_id", "city", "age", "gender", "signup_date"]], on="customer_id", how="left")
+feat["tenure_days"] = (cutoff - feat["signup_date"]).dt.days
+feat["lapsed"] = (~feat["customer_id"].isin(sept["customer_id"].unique())).astype(int)
+
+print("cohort:", len(feat), "lapsed:", feat["lapsed"].sum(), f"({feat['lapsed'].mean():.2%})")
+
+# ---- Task 5: split first, then fit encoders and scaler on TRAIN only ----
+num_cols = ["recency", "frequency", "monetary", "avg_discount", "avg_delivery",
+            "cancel_rate", "age", "tenure_days"]
+cat_cols = ["top_category", "city", "gender"]
+X_all = feat[num_cols + cat_cols]
+y = feat["lapsed"]
+X_train, X_test, y_train, y_test = train_test_split(
+    X_all, y, test_size=0.2, stratify=y, random_state=42)
+print("train:", len(X_train), "test:", len(X_test))
+print("baseline accuracy (always 'not lapsed'):", round((y_test == 0).mean(), 4))
+
+enc = OneHotEncoder(handle_unknown="ignore", sparse_output=False).fit(X_train[cat_cols])
+scaler = StandardScaler().fit(X_train[num_cols])
+def prep(Xd):
+    return np.hstack([scaler.transform(Xd[num_cols]), enc.transform(Xd[cat_cols])])
+Xtr, Xte = prep(X_train), prep(X_test)
+print("feature matrix shapes:", Xtr.shape, Xte.shape)

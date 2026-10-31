@@ -134,3 +134,37 @@ def prep(Xd):
     return np.hstack([scaler.transform(Xd[num_cols]), enc.transform(Xd[cat_cols])])
 Xtr, Xte = prep(X_train), prep(X_test)
 print("feature matrix shapes:", Xtr.shape, Xte.shape)
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import (confusion_matrix, precision_score, recall_score,
+                             f1_score, accuracy_score)
+
+def report(name, model, Xt, yt):
+    p = model.predict(Xt)
+    print(f"{name}: accuracy={accuracy_score(yt, p):.3f} precision={precision_score(yt, p):.3f} "
+          f"recall={recall_score(yt, p):.3f} f1={f1_score(yt, p):.3f}")
+    print(confusion_matrix(yt, p))
+
+# (a) baseline: always predict "not lapsed" (class 0)
+base_pred = np.zeros(len(y_test), dtype=int)
+print(f"baseline: accuracy={accuracy_score(y_test, base_pred):.3f} "
+      f"lapsed-class f1={f1_score(y_test, base_pred, zero_division=0):.3f}")
+
+# (b) tuned logistic regression
+lr_grid = GridSearchCV(LogisticRegression(max_iter=1000),
+                       {"C": [0.01, 0.1, 1, 10, 100]}, cv=5, scoring="f1")
+lr_grid.fit(Xtr, y_train)
+print("LR best:", lr_grid.best_params_, "cv f1:", round(lr_grid.best_score_, 3))
+
+# (c) tuned random forest (45 fits)
+rf_grid = GridSearchCV(RandomForestClassifier(n_estimators=100, random_state=42),
+                       {"max_depth": [3, 5, 8], "min_samples_leaf": [5, 10, 20]},
+                       cv=5, scoring="f1")
+rf_grid.fit(Xtr, y_train)
+print("RF best:", rf_grid.best_params_, "cv f1:", round(rf_grid.best_score_, 3))
+
+# (d) untouched test set: both tuned models
+report("tuned LR", lr_grid.best_estimator_, Xte, y_test)
+report("tuned RF", rf_grid.best_estimator_, Xte, y_test)

@@ -168,3 +168,44 @@ print("RF best:", rf_grid.best_params_, "cv f1:", round(rf_grid.best_score_, 3))
 # (d) untouched test set: both tuned models
 report("tuned LR", lr_grid.best_estimator_, Xte, y_test)
 report("tuned RF", rf_grid.best_estimator_, Xte, y_test)
+
+import joblib
+
+# ---- Task 7: over-sample the TRAINING set only ----
+pos = np.where(y_train.values == 1)[0]
+neg = np.where(y_train.values == 0)[0]
+rng = np.random.RandomState(42)
+extra = rng.choice(pos, size=len(neg) - len(pos), replace=True)
+Xb = np.vstack([Xtr, Xtr[extra]])
+yb = np.concatenate([y_train.values, y_train.values[extra]])
+print("balanced train counts:", np.bincount(yb))
+
+lr_bal = LogisticRegression(C=lr_grid.best_params_["C"], max_iter=1000).fit(Xb, yb)
+report("LR unbalanced", lr_grid.best_estimator_, Xte, y_test)
+report("LR balanced  ", lr_bal, Xte, y_test)
+
+# ---- Task 8a: interpretation ----
+feat_names = num_cols + list(enc.get_feature_names_out(cat_cols))
+rf = rf_grid.best_estimator_
+imp = pd.Series(rf.feature_importances_, index=feat_names).sort_values(ascending=False)
+print("top 5 RF importances:\n", imp.head(5).round(3))
+coef = pd.Series(lr_grid.best_estimator_.coef_[0], index=feat_names)
+for f in ["recency", "frequency", "monetary"]:
+    print("LR coefficient", f, round(coef[f], 3))
+
+# ---- Task 8b: persist and reload the selected model (random forest) ----
+joblib.dump(rf, "outputs/lapse_model.joblib")
+loaded = joblib.load("outputs/lapse_model.joblib")
+print("reloaded predictions identical:", np.array_equal(rf.predict(Xte), loaded.predict(Xte)))
+
+# ---- Task 8c: retention list for Premium customers in the test set ----
+test_ids = feat.loc[X_test.index, "customer_id"].values
+res = pd.DataFrame({"customer_id": test_ids,
+                    "lapse_probability": loaded.predict_proba(Xte)[:, 1].round(4),
+                    "actually_lapsed": y_test.values})
+res = res.merge(rfm[["customer_id", "is_premium"]], on="customer_id", how="left")
+prem = res[res["is_premium"].fillna(False).astype(bool)].sort_values("lapse_probability", ascending=False)
+top = prem.head(10)[["customer_id", "lapse_probability", "actually_lapsed"]]
+top.to_csv("outputs/retention_list.csv", index=False)
+print(top.to_string(index=False))
+print("premium customers in test set:", len(prem), "| truly lapsed in top list:", top["actually_lapsed"].sum())
